@@ -22,32 +22,24 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-          cache: gradle
 
-      - name: Extrair projeto do ZIP
+      - name: Extrair projeto
         shell: bash
         run: |
           set -e
-
           mkdir -p source
 
           ZIP_FILE=$(find . -maxdepth 3 -type f -iname "bananacreate.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERRO: bananacreate.zip não foi encontrado no repositório."
-            echo "Arquivos disponíveis:"
-            find . -maxdepth 3 -type f
+            echo "ERRO: bananacreate.zip não encontrado."
             exit 1
           fi
 
           echo "ZIP encontrado: $ZIP_FILE"
-
           unzip -o "$ZIP_FILE" -d source
 
-          echo "Conteúdo extraído:"
-          find source -maxdepth 4 -type f | head -200
-
-      - name: Encontrar projeto Gradle
+      - name: Encontrar projeto
         shell: bash
         run: |
           set -e
@@ -55,54 +47,66 @@ jobs:
           BUILD_FILE=$(find source -type f -name build.gradle -print -quit)
 
           if [ -z "$BUILD_FILE" ]; then
-            echo "ERRO: nenhum build.gradle foi encontrado dentro do ZIP."
+            echo "ERRO: build.gradle não encontrado."
             exit 1
           fi
 
           PROJECT_DIR=$(dirname "$BUILD_FILE")
-
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Projeto encontrado em: $PROJECT_DIR"
-          echo "Arquivos Gradle:"
+          echo "Projeto: $PROJECT_DIR"
           ls -la "$PROJECT_DIR"
 
-      - name: Conferir versões configuradas
+      - name: Corrigir versões e repositórios
         shell: bash
         run: |
-          echo "Verificando build.gradle:"
-          grep -nE "create_version|6\\.0\\.6|Registrate|ithundxr" "$PROJECT_DIR/build.gradle" || true
+          set -e
+          cd "$PROJECT_DIR"
 
-          echo "Verificando gradle.properties:"
-          if [ -f "$PROJECT_DIR/gradle.properties" ]; then
-            cat "$PROJECT_DIR/gradle.properties"
-          else
-            echo "AVISO: gradle.properties não encontrado."
+          if [ ! -f gradle.properties ]; then
+            echo "ERRO: gradle.properties não encontrado."
+            exit 1
           fi
+
+          # Corrige versões no gradle.properties
+          sed -i 's/^create_version=.*/create_version=6.0.6-98/' gradle.properties
+
+          grep -q '^ponder_version=' gradle.properties \
+            || echo 'ponder_version=1.0.59' >> gradle.properties
+
+          grep -q '^flywheel_version=' gradle.properties \
+            || echo 'flywheel_version=1.0.4' >> gradle.properties
+
+          grep -q '^registrate_version=' gradle.properties \
+            || echo 'registrate_version=MC1.21-1.3.0+62' >> gradle.properties
+
+          # Corrige versão antiga hardcoded no build.gradle
+          sed -i 's/6\.0\.6-150/6.0.6-98/g' build.gradle
+
+          # Garante repositório correto do Registrate
+          if ! grep -q 'maven.ithundxr.dev/snapshots' build.gradle; then
+            sed -i "/maven.ithundxr.dev\/mirror/d" build.gradle
+            sed -i "/maven.createmod.net/a\\    maven { url = 'https://maven.ithundxr.dev/snapshots' }" build.gradle
+          fi
+
+          echo "=== Versões finais ==="
+          grep -E '^(create_version|ponder_version|flywheel_version|registrate_version)=' gradle.properties
+
+          echo "=== Dependências Create/Registrate ==="
+          grep -nE 'create-|Registrate|ithundxr' build.gradle
 
       - name: Compilar mod
         shell: bash
         run: |
           set -e
           cd "$PROJECT_DIR"
-
-          if [ ! -f gradlew ]; then
-            echo "ERRO: gradlew não foi encontrado em $PROJECT_DIR"
-            exit 1
-          fi
-
           chmod +x gradlew
+          ./gradlew build --no-daemon --max-workers=2 --stacktrace
 
-          ./gradlew build \
-            --no-daemon \
-            --max-workers=2 \
-            --stacktrace
-
-      - name: Enviar JAR compilado
+      - name: Enviar JAR
         uses: actions/upload-artifact@v4
         with:
           name: BananaCreate-JAR
-          path: |
-            source/**/build/libs/*.jar
+          path: source/**/build/libs/*.jar
           if-no-files-found: error
           retention-days: 7
